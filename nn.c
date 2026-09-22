@@ -569,12 +569,14 @@ void dmse(float *Ypred, float *T, float *dA, size_t n){
 int main(){ 
 	srand(time(NULL)); // Reset the randomisation seed
 	#define n_layers 6
-	size_t layers[n_layers] = {2, 16, 32, 16, 8, 1};
+	//size_t layers[n_layers] = {2, 16, 32, 16, 8, 1};
 	Activation activations[n_layers - 1] = {{f, df}, {f, df}, {f, df}, {f, df}, {f, df}};
 	Loss loss = {mse, dmse};
-
-	struct neural_network *nn = create_nn(layers, activations, loss, n_layers);
-	//struct neural_network *nn = load_model("model.save", loss, activations);
+	printf("Loading model...\n");
+	//struct neural_network *nn = create_nn(layers, activations, loss, n_layers);
+	struct neural_network *nn = load_model("model.save", loss, activations);
+	printf("Model loaded!\n");
+	
 	if(!nn){
 		printf("Neural Network couldn't be created: Malloc Error\n");
 		return -1;
@@ -586,7 +588,7 @@ int main(){
 		destroy_nn(nn);
 		return -1;
 	}
-
+/*
 	/// Testing the save and load model functions
 	float Xt[2]= {0, 0};
 
@@ -605,8 +607,8 @@ int main(){
 	forward(nn, Xt, caches);
 	print_vector(caches[n_layers - 1].A, 1);
 	nn_summary(nn);
-
-	/*
+*/
+	
 	Grad *grads = create_grads(nn);
 	if(!grads){	
 		printf("Gradients could'nt be created: Malloc Error\n");
@@ -637,7 +639,7 @@ int main(){
 	}
 	
 
-	train(nn, caches, grads, Xs, Ts, training_set, 10, 1e-1 * 2);
+	train(nn, caches, grads, Xs, Ts, training_set, 1000, 2e-1);
 
 	#define n_test 9
 	float Xtest[n_test][2] = {{0, 0}, {0.5, 0.5}, {1, 1}, {0.5, 1}, {1, 0.5}, {0.2, 0.5}, {0.8, 1}, {1, 0}, {0, 1}};
@@ -646,9 +648,11 @@ int main(){
 		forward(nn, Xtest[i], caches);
 		printf("|Test n°%i - for: ", (int)i);
 		print_vector(Xtest[i], 2);
-		printf(" - got: %f|\n", caches[nn->len].A[0]);
+		float error = fabsf(caches[nn->len].A[0] - fabsf(Xtest[i][0] - Xtest[i][1]));
+		printf(" - got: %f and expected: %f - Error of: %f|\n", caches[nn->len].A[0],
+		 fabsf(Xtest[i][0] - Xtest[i][1]), error);
 	}
-	*/
+	
 	/*
 	printf("Starting forward propagation...\n");
 	float X[2] = {1};
@@ -676,9 +680,11 @@ int main(){
 
 	forward(nn, X, caches);
 	printf("New loss: %f\n", loss.forward(caches[2].A, T, 1));
-	
-	destroy_grads(grads, n_layers);
 	*/
+	printf("Saving model...\n");
+	save_model(nn, "model.save");
+	printf("Model saved!\n");
+	destroy_grads(grads, n_layers);
 	destroy_caches(caches, n_layers);
 	destroy_nn(nn);
 	return 0;
