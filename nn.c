@@ -340,6 +340,191 @@ void train(
 }
 
 
+/// SAVE FILE PARTITION:
+/// {len of the layer in bytes = sizeof(size_t)} | {Network Shape = sizeof(size_t) * len} |
+/// {(len of weights in bytes = sizeof(float) * L[i].in * L[i].out) + (len of bias in bytes = sizeof(float) * L[i].out)} 
+int save_model(struct neural_network *nn, char* filepath){
+	if(!nn)
+		return -1;
+	FILE *file = fopen(filepath, "wb");
+	if(!file){
+		return -2;
+	}
+	// write len of the shape in bytes of size_t
+	size_t len = nn->len + 1;
+	if(1 != fwrite(&len, sizeof(size_t), 1, file)){
+ 		fclose(file);
+ 		return -2;
+ 	}
+	
+	
+	// Write first layer size
+	if(1 != fwrite(&nn->layers[0].in, sizeof(size_t), 1, file)){
+		fclose(file);
+		return -2;
+	}
+	
+	// Write others layers size
+	for(size_t i = 0; i < nn->len; i++){
+		if(1 != fwrite(&nn->layers[i].out, sizeof(size_t), 1, file)){
+			fclose(file);
+			return -2;
+		}
+	}
+
+	for(size_t j = 0; j < nn->len; j++){
+		struct layer *L = &nn->layers[j];
+		// Write weights of L[i]
+		if(L->in * L->out != fwrite(L->weights, sizeof(float), L->in * L->out, file)){
+			fclose(file);
+			return -2;
+		}
+
+		// Write bias of L[i]
+		if(L->out != fwrite(L->bias, sizeof(float), L->out, file)){
+			fclose(file);
+			return -2;
+		}
+		
+	}
+	
+	
+	fclose(file);
+	return 0;
+}
+
+struct neural_network *load_model(char* filepath, Loss loss, Activation activations[]){
+	
+
+	FILE *file = fopen(filepath, "rb");
+	if(!file)
+		return NULL;
+
+	size_t n_layers = 0;
+	
+	// Read the length of layers
+	if(1 != fread(&n_layers, sizeof(size_t), 1, file)){
+		fclose(file);
+		return NULL;
+	}
+	size_t *layers = malloc(sizeof(size_t) * n_layers);
+	// Verify that malloc succeed
+	if(!layers){
+		fclose(file);
+		return NULL;
+	}
+	// Read layers shape
+	if(n_layers != fread(layers, sizeof(size_t), n_layers, file)){
+		fclose(file);
+		free(layers);
+		return NULL;
+	}
+
+	struct neural_network *nn = malloc(sizeof(struct neural_network));
+	
+	// Verify that malloc succeed
+	if(!nn){
+		fclose(file);
+		free(layers);
+		return NULL;
+	}
+	nn->loss = loss;
+
+	
+	nn->output_neural_len = layers[n_layers - 1];
+
+	// Malloc the layers
+	nn->layers =  malloc(sizeof(struct layer) * (n_layers - 1));
+	
+	// Verify that malloc succeed
+	if(!nn->layers){
+		free(nn);
+		free(layers);
+		fclose(file);
+		return NULL;
+	}
+	
+	nn->len = n_layers - 1;
+
+	for(size_t i = 0; i < n_layers - 1; i++){
+		struct layer *l = (nn->layers + i);
+		l->in = layers[i]; 
+		l->out = layers[i + 1];
+		l->activation = activations[i];
+
+
+		// Malloc weights array
+		l->weights = malloc(sizeof(float) * layers[i+1] * layers[i]);
+
+		// Verify that malloc succeed
+		if(!l->weights){
+			for(size_t j = 0; j < i; j++){
+				free(nn->layers[j].weights);
+				free(nn->layers[j].bias);
+			}
+			free(nn->layers);
+			free(nn);
+			
+			free(layers);
+			fclose(file);
+			return NULL;
+		}
+		
+		// Read and load weights from the file
+		if(l->in * l->out != fread(l->weights, sizeof(float), l->in * l->out, file)){
+			free(l->weights);
+			for(size_t j = 0; j < i; j++){
+				free(nn->layers[j].weights);
+				free(nn->layers[j].bias);
+			}
+			free(nn->layers);
+			free(nn);
+			
+			free(layers);
+			fclose(file);
+			return NULL;
+		}
+		
+		// malloc and fill bias
+		l->bias = malloc(sizeof(float) * layers[i + 1]);
+
+		// Verify that malloc succeed
+		if(!l->bias){
+			free(l->weights);
+			for(size_t j = 0; j < i; j++){
+				free(nn->layers[j].weights);
+				free(nn->layers[j].bias);
+			}
+			free(nn->layers);
+			free(nn);
+			
+			free(layers);
+			fclose(file);
+			return NULL;
+		}
+
+		// Read and load bias from the file
+		if(l->out != fread(l->bias, sizeof(float), l->out, file)){
+			free(l->weights);
+			free(l->bias);
+			for(size_t j = 0; j < i; j++){
+				free(nn->layers[j].weights);
+				free(nn->layers[j].bias);
+			}
+			free(nn->layers);
+			free(nn);
+			
+			free(layers);
+			fclose(file);
+			return NULL;
+		}
+	}
+	free(layers);
+	fclose(file);
+	
+	return nn;
+}
+
 
 // ------------ TESTING -------------------
 
@@ -383,16 +568,17 @@ void dmse(float *Ypred, float *T, float *dA, size_t n){
 
 int main(){ 
 	srand(time(NULL)); // Reset the randomisation seed
-	#define n_layers 3
-	size_t layers[n_layers] = {2, 3, 1};
-	Activation activations[n_layers - 1] = {{f, df}, {f, df}};
+	#define n_layers 6
+	size_t layers[n_layers] = {2, 16, 32, 16, 8, 1};
+	Activation activations[n_layers - 1] = {{f, df}, {f, df}, {f, df}, {f, df}, {f, df}};
 	Loss loss = {mse, dmse};
+
 	struct neural_network *nn = create_nn(layers, activations, loss, n_layers);
+	//struct neural_network *nn = load_model("model.save", loss, activations);
 	if(!nn){
 		printf("Neural Network couldn't be created: Malloc Error\n");
 		return -1;
 	}
-	nn_summary(nn);
 
 	Cache *caches = create_caches(nn);
 	if(!caches){
@@ -401,7 +587,26 @@ int main(){
 		return -1;
 	}
 
-	
+	/// Testing the save and load model functions
+	float Xt[2]= {0, 0};
+
+	forward(nn, Xt, caches);
+	print_vector(caches[n_layers - 1].A, 1);
+	nn_summary(nn);
+
+	printf("Saving model\n");
+	save_model(nn, "model.save");
+	printf("Model saved!\n");
+	destroy_nn(nn);
+
+	printf("Loading model...\n");
+	nn = load_model("model.save", loss, activations);
+	printf("Model loaded!\n");
+	forward(nn, Xt, caches);
+	print_vector(caches[n_layers - 1].A, 1);
+	nn_summary(nn);
+
+	/*
 	Grad *grads = create_grads(nn);
 	if(!grads){	
 		printf("Gradients could'nt be created: Malloc Error\n");
@@ -409,23 +614,41 @@ int main(){
 		destroy_nn(nn);
 		return -1;
 	}
-	float x0[2]={1,0}, x1[2]={1,1}, x2[2]={0,1};
-	float *Xs[3]={x0,x1,x2}; 
-	float t1[1]={1}, t2[1]={0}, t3[1]={1};
-	float *Ts[3] = {t1, t2, t3};
 
-	train(nn, caches, grads, Xs, Ts, 3, 100000, 0.001);
-
-	float Xtest1[2] = {0, 1};
-	float Xtest2[2] = {1, 1};
-
-	forward(nn, Xtest1, caches);
-	printf("Test1 result:\n");
-	print_vector(caches[nn->len].A, nn->layers[nn->len - 1].out);
+	/// This trainng exemple return the gap between two number
+	/// Exemple:
+	/// 	{1, 0} gap = 1
+	/// 	{0.3, 1} gap = 0.7
+	/// 	{0.5, 0.5} gapt = 0 etc
 	
-	forward(nn, Xtest2, caches);
-	printf("Test2 result:\n");
-	print_vector(caches[nn->len].A, nn->layers[nn->len - 1].out);
+	#define training_set 100
+	float Xs_data[training_set][2];
+	float Ts_data[training_set][1];
+	float *Xs[training_set] = {0}; 
+	float *Ts[training_set] = {0};
+
+	// Generate random datasets
+	for(size_t i = 0; i < training_set; i++){
+		Xs_data[i][0] = random1m1()/2;
+		Xs_data[i][1] = random1m1()/2;
+		Xs[i] = Xs_data[i];
+		Ts_data[i][0] = fabsf(Xs_data[i][0] - Xs_data[i][1]);
+		Ts[i] = Ts_data[i];
+	}
+	
+
+	train(nn, caches, grads, Xs, Ts, training_set, 10, 1e-1 * 2);
+
+	#define n_test 9
+	float Xtest[n_test][2] = {{0, 0}, {0.5, 0.5}, {1, 1}, {0.5, 1}, {1, 0.5}, {0.2, 0.5}, {0.8, 1}, {1, 0}, {0, 1}};
+
+	for(size_t i = 0; i < n_test; i++){
+		forward(nn, Xtest[i], caches);
+		printf("|Test n°%i - for: ", (int)i);
+		print_vector(Xtest[i], 2);
+		printf(" - got: %f|\n", caches[nn->len].A[0]);
+	}
+	*/
 	/*
 	printf("Starting forward propagation...\n");
 	float X[2] = {1};
@@ -453,8 +676,10 @@ int main(){
 
 	forward(nn, X, caches);
 	printf("New loss: %f\n", loss.forward(caches[2].A, T, 1));
-	*/
+	
 	destroy_grads(grads, n_layers);
+	*/
 	destroy_caches(caches, n_layers);
 	destroy_nn(nn);
+	return 0;
 }

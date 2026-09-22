@@ -88,4 +88,12 @@ void train(
   size_t epochs, // Number of epoch for the ai to be trained
   float lr // Learning rate
 );
+
+// Will save the model in a custom path
+int save_model(struct neural_network *nn, char* filepath);
+
+// Will load the model and return a new neural_network struct
+struct neural_network *load_model(char* filepath, Loss loss, Activation activations[]);
+
+
 #endif
