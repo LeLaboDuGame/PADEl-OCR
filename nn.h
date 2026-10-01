@@ -6,7 +6,7 @@
 // Activation type
 typedef struct {
   void (*forward)(float *Z, float *A, size_t n);      // ex: relu, sigmoid, softmax
-  void (*backward)(float *dA, float *Z, float *dZ, size_t n); // * dZ
+  void (*backward)(float *dA, float *Z, float *A, float *dZ, size_t n); // * dZ
 } Activation;
 
 
@@ -94,6 +94,9 @@ int save_model(struct neural_network *nn, char* filepath);
 
 // Will load the model and return a new neural_network struct
 struct neural_network *load_model(char* filepath, Loss loss, Activation activations[]);
+
+
+void print_params(struct neural_network *nn, size_t id);
 
 
 #endif

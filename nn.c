@@ -4,9 +4,16 @@
 #include <stdio.h>
 #include <math.h>
 #include "utils.h"
+#include "dataset.h"
 
 // Verbose level
 short VERBOSE = 2;
+
+// Forward declarations of the concrete backward functions defined in the
+// TESTING section below. Needed here so backward() can detect the
+// softmax+CE pair for the numerically fused path (pointer comparison).
+void dsoftmax(float *dA, float *Z, float *A, float *dZ, size_t n);
+void dce(float *Ypred, float *T, float *dA, size_t n);
 
 
 // Create a neural_network struct
@@ -55,7 +62,7 @@ struct neural_network *create_nn(
 			free(nn);
 			return NULL;
 		}
-		fill_random_array(l->bias, layers[i + 1]);
+		fill_random_array(l->bias, layers[i + 1], 1);
 		
 		// Malloc weights array
 		l->weights = malloc(sizeof(float) * layers[i+1] * layers[i]);
@@ -72,7 +79,7 @@ struct neural_network *create_nn(
 			return NULL;
 		}
 				
-		fill_random_array(l->weights, layers[i+1] * layers[i]);
+		fill_random_array(l->weights, layers[i+1] * layers[i], layers[i]);
 	}
 
 	
@@ -241,6 +248,7 @@ void destroy_grads(Grad *g, size_t len){
 	free(g);
 }
 
+
 void forward(struct neural_network *nn, float* X, Cache *caches){
 	for(size_t i = 0; i < nn->layers[0].in; i++){
 		caches[0].A[i] = X[i];
@@ -272,24 +280,15 @@ void backward(struct neural_network *nn, Cache *caches, Grad *grads, float* T, f
 	float *Z_last = caches[nn->len].Z;
 	struct layer *L = &nn->layers[nn->len-1];
 
-
-	// Output
 	nn->loss.backward(Ypred, T, dA_last, L->out);
-	L->activation.backward(dA_last, Z_last, dZ_last, L->out);
+	L->activation.backward(dA_last, Z_last, Ypred, dZ_last, L->out);
 
-	// Update weaights and bias
-	for(size_t o = 0; o < L->out; o++){
-		L->bias[o] -= lr * dZ_last[o];
-		for(size_t i = 0; i < L->in; i++){
-			L->weights[o*L->in+i] -= lr * dZ_last[o] * caches[nn->len-1].A[i];
-		}
-	}
-
-	// Hiden propagation
+	// Premiere passe: on calcule tous les dZ sans toucher aux poids, pour que
+	// la retropropagation utilise toujours les poids du step courant. Mettre a
+	// jour la derniere couche avant de propager faisait diverger le reseau
 	for(int l = (int)nn->len - 2; l >= 0; l--){
-		L = &nn->layers[l];
+		struct layer *Lcur = &nn->layers[l];
 		struct layer *Lnext = &nn->layers[l+1];
-		// dA[l+1] = W_next^T * dZ_next
 		for(size_t i = 0; i < Lnext->in; i++){
 			float sum = 0;
 			for (size_t k = 0; k < Lnext->out; k++){
@@ -297,18 +296,22 @@ void backward(struct neural_network *nn, Cache *caches, Grad *grads, float* T, f
 			}
 			grads[l+1].dA[i] = sum;
 		}
-		// dZ = f'(Z)*dA
-		L->activation.backward(grads[l + 1].dA, caches[l+1].Z, grads[l+1].dZ, L->out);
+		Lcur->activation.backward(grads[l + 1].dA, caches[l+1].Z, caches[l+1].A, grads[l+1].dZ, Lcur->out);
+	}
 
-		// Update weights and bias
-		for(size_t o = 0; o < L->out; o++){
-			L->bias[o] -= lr * grads[l+1].dZ[o];
-			for(size_t i = 0; i < L->in; i++){
-				L->weights[o*L->in+i] -= lr * grads[l+1].dZ[o] * caches[l].A[i];
+	// Deuxieme passe: on applique les gradients
+	for(size_t l = 0; l < nn->len; l++){
+		struct layer *Lcur = &nn->layers[l];
+		float *dZ = grads[l+1].dZ;
+		float *Aprev = caches[l].A;
+		for(size_t o = 0; o < Lcur->out; o++){
+			float d_bias = lr * dZ[o];
+			Lcur->bias[o] -= d_bias;
+			for(size_t i = 0; i < Lcur->in; i++){
+				Lcur->weights[o*Lcur->in+i] -= lr * dZ[o] * Aprev[i];
 			}
 		}
 	}
-
 }
 
 
@@ -321,6 +324,7 @@ void train(
   float lr // Learning rate
 ){
 	printf("Starting training over %i epochs on a %i dataset length...\n", (int)epochs, (int)N);
+	float mean_loss = 0;
 	for(size_t e = 0; e < epochs; e++){
 		float loss_sum = 0;
 		for(size_t n = 0; n < N; n++){
@@ -331,8 +335,9 @@ void train(
 			backward(nn, caches, grads, Ts[n], lr);
 		}
 		if(VERBOSE >= 1){
-			float mean_loss = loss_sum / N;
-			printf("Epochs n°%i/%i - Loss: %f\n", (int)e, (int)epochs, mean_loss);
+			printf("Epochs n°%i/%i - Loss: %.10f - diff: %.10f\n", (int)e, (int)epochs, loss_sum / N, loss_sum / N - mean_loss);
+			mean_loss = loss_sum / N;
+
 		}
 		
 	}
@@ -526,6 +531,26 @@ struct neural_network *load_model(char* filepath, Loss loss, Activation activati
 }
 
 
+void print_params(struct neural_network *nn, size_t id){
+	if(!nn)
+		return;
+	struct layer *l = &nn->layers[id];
+
+	if(!l)
+		return;
+
+	printf("Printing layer %i\nShape: %i->%i\nBias:\n", (int) id, (int)l->in, (int)l->out);
+	print_vector(l->bias, l->out);
+
+	printf("Weights:\n");
+	for(size_t o = 0; o < l->out;o++){
+		print_vector(&l->weights[o * l->in], l->in);
+	}
+
+	printf("\nEnd.\n");
+}
+
+
 // ------------ TESTING -------------------
 
 
@@ -533,21 +558,40 @@ void f(float *Z, float *A, size_t n){
 	for(size_t i = 0; i < n; i++) A[i] = 1/(1 + exp(-Z[i]));
 }
 
-void df(float *dA, float *Z, float *dZ, size_t n){
+void df(float *dA, float *Z, float *A, float *dZ, size_t n){
+	(void) Z;
 	for(size_t i = 0; i < n; i++){
-		float s = 1/(1+exp(-Z[i]));
-		dZ[i] = dA[i]*s*(1-s);
+		dZ[i] = dA[i]*A[i]*(1-A[i]);
 	}
 }
 
 float ce(float *Ypred, float *T, size_t n){
 	float s=0;
-	for(size_t i = 0; i < n; i++) s += -T[i]*log(Ypred[i]+1e-8);
-	return s;
+	float max = Ypred[0];
+	for(size_t i = 1; i < n; i ++) max = fmaxf(max, Ypred[i]);
+	for(size_t i = 0; i < n; i++) s += expf(Ypred[i] - max);
+	s = logf(s);
+	float target_logits = Ypred[0];
+	for(size_t i = 0; i < n; i++){
+		if(T[i] >= 0.5){
+			target_logits = Ypred[i];
+			break;
+		}
+	}
+	return s - (target_logits - max);
 }
 
 void dce(float *Ypred, float *T, float *dA, size_t n){
- 	for(size_t i = 0; i < n; i++) dA[i] = -T[i]/(Ypred[i]+1e-8);
+	float max = Ypred[0];
+	for(size_t i = 1; i < n; i++) max = fmaxf(max, Ypred[i]);
+
+	float sum = 0.0f;
+	for(size_t i = 0; i < n; i++) sum += expf(Ypred[i] - max);
+
+	for(size_t i = 0; i < n; i++){
+		float p = expf(Ypred[i] - max) / sum; // vraie proba softmax
+		dA[i] = p - T[i];
+	}
 }
 
 
@@ -565,18 +609,78 @@ void dmse(float *Ypred, float *T, float *dA, size_t n){
 	}
 }
 
+void lrelu(float *Z, float *A, size_t n){
+	for(size_t i = 0; i < n; i++) A[i] = fmaxf(0.001*Z[i], Z[i]);
+}	
+
+void dlrelu(float *dA, float *Z, float *A, float *dZ, size_t n){
+	(void)A;
+	for(size_t i = 0; i < n; i++){
+		dZ[i] = dA[i] * (Z[i] > 0 ? 1 : 0.001);
+	}
+}
+
+void softmax(float *Z, float *A, size_t n){
+	(void) Z;
+	(void) A;
+	(void) n;
+	/*
+	float max = Z[0];
+	for(size_t i = 1; i < n; i++){
+		Z[i] = log(fmaxf(Z[i], 1e-4));
+		max = fmaxf(Z[i], max);
+	}
+	float sum = 0.0f;
+    for(size_t j = 0; j < n; j++){
+        sum += expf(Z[j] - max);
+    }
+	
+	for(size_t i = 0; i < n; i++) {
+        A[i] = expf(Z[i] - max) / sum;
+	}
+	*/
+	// Simply identity as Softmax+CE vanish we need to use a special form of the mathematical function
+	for(size_t i = 0; i < n; i++){
+		A[i] = Z[i];
+	}
+	
+}
+
+void dsoftmax(float *dA, float *Z, float *A, float *dZ, size_t n){
+	(void) Z;
+	(void) A;
+	/*
+	(void) Z;
+	float dot_product = 0.0f;
+   
+    for (size_t j = 0; j < n; j++) {
+        dot_product += dA[j] * A[j];
+    }
+    for (size_t i = 0; i < n; i++) {
+        dZ[i] = A[i] * (dA[i] - dot_product);
+    }
+    */
+    for(size_t i = 0; i < n; i++){
+    	dZ[i] = dA[i];
+    }
+    
+}
 
 int main(){ 
 	srand(time(NULL)); // Reset the randomisation seed
-	#define n_layers 6
-	//size_t layers[n_layers] = {2, 16, 32, 16, 8, 1};
-	Activation activations[n_layers - 1] = {{f, df}, {f, df}, {f, df}, {f, df}, {f, df}};
-	Loss loss = {mse, dmse};
+	#define n_layers 4
+	size_t layers[n_layers] = {28*28, 128, 64, 26};
+	Activation activations[n_layers - 1] = {{lrelu, dlrelu}, {lrelu, dlrelu}, {softmax, dsoftmax}};
+	Loss loss = {ce, dce};
 	printf("Loading model...\n");
-	//struct neural_network *nn = create_nn(layers, activations, loss, n_layers);
-	struct neural_network *nn = load_model("model.save", loss, activations);
+	struct neural_network *nn = load_model("model3.save", loss, activations);
+	if(!nn){
+		printf("Creating a new network\n");
+		nn = create_nn(layers, activations, loss, n_layers);
+
+	}
 	printf("Model loaded!\n");
-	
+	//print_params(nn, 2);
 	if(!nn){
 		printf("Neural Network couldn't be created: Malloc Error\n");
 		return -1;
@@ -617,6 +721,17 @@ int main(){
 		return -1;
 	}
 
+	Dataset *d = load_dataset("dataset.bin", 28*28, 26);
+	Dataset *dt = load_dataset("testds.bin", 28*28, 26);
+
+	if(!d || !dt){
+		printf("Dataset could'nt be created: Malloc Error");
+		destroy_caches(caches, n_layers);
+		destroy_grads(grads, n_layers);
+		destroy_nn(nn);
+	}
+	
+	/*
 	/// This trainng exemple return the gap between two number
 	/// Exemple:
 	/// 	{1, 0} gap = 1
@@ -637,21 +752,33 @@ int main(){
 		Ts_data[i][0] = fabsf(Xs_data[i][0] - Xs_data[i][1]);
 		Ts[i] = Ts_data[i];
 	}
+	*/
 	
-
-	train(nn, caches, grads, Xs, Ts, training_set, 1000, 2e-1);
-
+	train(nn, caches, grads, d->input_data, d->output_data, d->dataset_length, 10, 5e-3);
+	/*
 	#define n_test 9
 	float Xtest[n_test][2] = {{0, 0}, {0.5, 0.5}, {1, 1}, {0.5, 1}, {1, 0.5}, {0.2, 0.5}, {0.8, 1}, {1, 0}, {0, 1}};
-
-	for(size_t i = 0; i < n_test; i++){
-		forward(nn, Xtest[i], caches);
-		printf("|Test n°%i - for: ", (int)i);
-		print_vector(Xtest[i], 2);
-		float error = fabsf(caches[nn->len].A[0] - fabsf(Xtest[i][0] - Xtest[i][1]));
-		printf(" - got: %f and expected: %f - Error of: %f|\n", caches[nn->len].A[0],
-		 fabsf(Xtest[i][0] - Xtest[i][1]), error);
+*/	
+	int max(float* X, size_t n){
+		float max = X[0];
+		int id = 0;
+		for(size_t i = 1; i < n; i++){
+			if(X[i] > max){
+				max = X[i];
+				id = i;
+			}
+		}
+		return id;
+		
+	};
+	size_t good = 0, total = dt->dataset_length;
+	for(size_t i = 0; i < total; i++){
+	    forward(nn, dt->input_data[i], caches);
+	    int need = max(dt->output_data[i], 26);
+	    int got = max(caches[nn->len].A, 26);
+	    if(got == need) good++;
 	}
+	printf("Accuracy réelle: %zu/%zu = %.2f%%\n", good, total, 100.0*good/total);
 	
 	/*
 	printf("Starting forward propagation...\n");
@@ -682,8 +809,10 @@ int main(){
 	printf("New loss: %f\n", loss.forward(caches[2].A, T, 1));
 	*/
 	printf("Saving model...\n");
-	save_model(nn, "model.save");
+	save_model(nn, "model3.save");
 	printf("Model saved!\n");
+	destroy_dataset(d);
+	destroy_dataset(dt);
 	destroy_grads(grads, n_layers);
 	destroy_caches(caches, n_layers);
 	destroy_nn(nn);
