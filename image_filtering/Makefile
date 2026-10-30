@@ -23,6 +23,7 @@ cells.o: cells.c cells.h images.h
 
 clean:
 	rm -f $(OBJS)
+	rm -f cells/*.png
 
 mrproper: clean
 	rm -f $(TARGET)
