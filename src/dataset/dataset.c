@@ -119,6 +119,36 @@ Dataset *load_dataset(char* filename, size_t input_length, size_t output_length)
 }
 
 
+int create_dataset(size_t dataset_length, size_t input_length, size_t output_length, char *filename, float **input_data, float **output_data){
+	if(!filename || !input_data || !output_data)
+		return -1;
+
+	FILE *f = fopen(filename, "wb");
+	if(!f)
+		return -1;
+
+	if(1 != fwrite(&dataset_length, sizeof(size_t), 1, f)){
+		fclose(f);
+		return -1;
+	}
+
+	for(size_t i = 0; i < dataset_length; i++){
+		if(output_length != fwrite(output_data[i], sizeof(float), output_length, f)){
+			fclose(f);
+			return -1;
+		}
+
+		if(input_length != fwrite(input_data[i], sizeof(float), input_length, f)){
+			fclose(f);
+			return -1;
+		}
+	}
+
+	fclose(f);
+	return 0;
+}
+
+
 void destroy_dataset(Dataset *d){
 	if(!d)
 		return;

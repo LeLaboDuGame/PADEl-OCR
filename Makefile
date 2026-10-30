@@ -1,11 +1,14 @@
-CC=gcc
-PARAMS=-Wall -Wextra -fsanitize=address -O3 -march=native -ffast-math
+CC = gcc
+PARAMS = -Wall -Wextra -fsanitize=address -O3 -march=native -ffast-math -g
 
-nn: *.c 
-	${CC} ${PARAMS} $^ -g -lm -o $@.o
-	./$@.o
+NN_DIR = src/neural_network
+GENERATED = xor ocr xor_model.bin ocr_model.bin xor_training_dataset.bin xor_test_dataset.bin ocr_train_dataset.bin ocr_test_dataset.bin
 
+all:
+	$(MAKE) -C $(NN_DIR) all
 
-dataset: dataset.c
-	${CC} ${PARAMS} $^ -g -lm -o $@.o
-	./$@.o
+clean:
+	$(MAKE) -C $(NN_DIR) clean
+	rm -f $(GENERATED) *.o
+
+.PHONY: all clean
