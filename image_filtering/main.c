@@ -1,7 +1,4 @@
 #include "images.h"
-#include "filters.h"
-#include "grid.h"
-#include "cells.h"
 
 int main(int argc, char *argv[]){
     if (argc < 2){
@@ -15,13 +12,12 @@ int main(int argc, char *argv[]){
 
     int t = otsu_treshold(img);
     printf("seuil = %d\n", t);
-
+	image_rotate(img, 0, 255);
     Image *bin = treshold(img, t);
     if (!bin){
         free_image(img);
         return 1;
     }
-    image_save(bin, "binary.png");
 
     int status = 0;
     int *cols, *rows, ncols, nrows;

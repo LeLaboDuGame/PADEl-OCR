@@ -1,5 +1,6 @@
 #include "images.h"
 
+
 Image *image_create(int w, int h){ //this function will create an image following the struct Image definition
     if(w<=0 || h<= 0){
         return NULL;
@@ -83,4 +84,52 @@ int image_save(const Image *img, const char *path){ //saves the grayscale image
     int res = IMG_SavePNG(surface, path);
     SDL_FreeSurface(surface);
     return res;
+}
+
+
+
+Image *image_rotate(const Image *src, double angle_deg, unsigned char fill){
+    double rad = angle_deg * PI / 180.0;
+    double c = cos(rad);
+    double s = sin(rad);
+
+    // Size of the bounding box of the rotated image.
+    // The - 1e-9 stops tiny floating-point errors (cos(90°) is not exactly 0)
+    // from adding a useless extra pixel through ceil.
+    int new_w = (int)ceil(fabs(src->w * c) + fabs(src->h * s) - 1e-9);
+    int new_h = (int)ceil(fabs(src->w * s) + fabs(src->h * c) - 1e-9);
+
+    Image *out = image_create(new_w, new_h);
+    if (!out){
+        return NULL;
+    }
+
+    // Centers of both images, in pixel coordinates
+    double cx_src = (src->w - 1) / 2.0;
+    double cy_src = (src->h - 1) / 2.0;
+    double cx_out = (new_w - 1) / 2.0;
+    double cy_out = (new_h - 1) / 2.0;
+
+    for (int y = 0; y < new_h; y++){
+        for (int x = 0; x < new_w; x++){
+            // Position of the output pixel relative to the output center
+            double dx = x - cx_out;
+            double dy = y - cy_out;
+
+            // Inverse rotation: where does this output pixel come from in src?
+            double sx = dx * c + dy * s + cx_src;
+            double sy = -dx * s + dy * c + cy_src;
+
+            // Nearest source pixel
+            int ix = (int)floor(sx + 0.5);
+            int iy = (int)floor(sy + 0.5);
+
+            if (ix >= 0 && ix < src->w && iy >= 0 && iy < src->h){
+                out->data[y * new_w + x] = src->data[iy * src->w + ix];
+            } else {
+                out->data[y * new_w + x] = fill;   // outside the original image
+            }
+        }
+    }
+    return out;
 }

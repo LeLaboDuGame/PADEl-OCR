@@ -1,4 +1,4 @@
-#include "filters.h"
+#include "images.h"
 
 //fills hist with the grayscale histogram of src: hist[v] = number of pixels whose gray value is exactly v (v from 0 to 255)
 void compute_histogram(const Image *src, int hist[256]){

@@ -1,5 +1,4 @@
-#include "grid.h"
-
+#include "images.h"
 
 // for each column x, counts the dark pixels found in that column
 //Columns crossed by a vertical grid line get a very high count
